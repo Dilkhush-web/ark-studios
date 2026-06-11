@@ -1,8 +1,12 @@
-// 1. Tools Import (Dotenv sabse upar hona chahiye)
+// 1. Tools Import
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
+const Slot = require('./models/Slot');
+const Booking = require('./models/Booking');
+const Staff = require('./models/Staff');
+const nodemailer = require('nodemailer'); 
 
 // 2. Waiter (App) Setup
 const app = express();
@@ -16,10 +20,9 @@ app.use(cors({
 app.use(express.json());
 
 // 3. 📦 KITCHEN (DATABASE) CONNECTION
-// Ye code .env file se tumhara MONGO_URI link uthayega
 mongoose.connect(process.env.MONGO_URI, {
     serverSelectionTimeoutMS: 5000, 
-    family: 4 // Zabardasti IPv4 use karwayega
+    family: 4 
 })
 .then(() => {
     console.log("📦 Kitchen (MongoDB) Connected Successfully! 🔥");
@@ -48,12 +51,92 @@ app.get('/api/slots', (req, res) => {
         { _id: "103", date: "2026-06-16", time: "11:00 AM", isBooked: false },
         { _id: "104", date: "2026-06-16", time: "04:00 PM", isBooked: false }
     ];
-    
-    res.json({
-        success: true,
-        message: "Dummy slots fetched successfully!",
-        data: dummySlots
-    });
+    res.json({ success: true, message: "Dummy slots fetched successfully!", data: dummySlots });
+});
+
+// 📝 CREATE NEW BOOKING (Client form)
+app.post('/api/bookings', async (req, res) => {
+    try {
+        const { clientName, clientEmail, clientPhone, eventType, slotId } = req.body;
+        const newBooking = await Booking.create({
+            clientName, clientEmail, clientPhone, eventType, slotId, status: 'Pending'
+        });
+        await Slot.findByIdAndUpdate(slotId, { isBooked: true });
+        res.status(201).json({ success: true, message: "Slot successfully booked! 🎉", data: newBooking });
+    } catch (error) {
+        console.log("Booking Error:", error);
+        res.status(500).json({ success: false, message: "Server error", error: error.message });
+    }
+});
+
+// 🛡️ ADMIN PANEL: Saari bookings fetch karna
+app.get('/api/admin/bookings', async (req, res) => {
+    try {
+        const bookings = await Booking.find().sort({ createdAt: -1 }); 
+        res.status(200).json({ success: true, count: bookings.length, data: bookings });
+    } catch (error) {
+        console.log("Admin Fetch Error:", error);
+        res.status(500).json({ success: false, message: "Server error", error: error.message });
+    }
+});
+
+// 👥 ADMIN PANEL: Naya Staff Add Karna
+app.post('/api/staff', async (req, res) => {
+    try {
+        const newStaff = await Staff.create(req.body);
+        res.status(201).json({ success: true, message: "Naya staff member add ho gaya!", data: newStaff });
+    } catch (error) {
+        console.log("Staff Add Error:", error);
+        res.status(500).json({ success: false, message: "Server error", error: error.message });
+    }
+});
+
+// 🛠️ ADMIN PANEL: Booking par Staff Assign karna + REAL EMAIL Bhejna
+app.patch('/api/bookings/:id/assign', async (req, res) => {
+    try {
+        const bookingId = req.params.id; 
+        const { staffId } = req.body;    
+
+        // 1. Booking assign karna
+        const updatedBooking = await Booking.findByIdAndUpdate(
+            bookingId,
+            { staffId: staffId, status: 'Assigned' },
+            { new: true } 
+        );
+
+        // 2. Staff ki details nikalna (Real email aur naam ke liye)
+        const staffMember = await Staff.findById(staffId);
+        
+        // 3. NODEMAILER EMAIL LOGIC
+        const transporter = nodemailer.createTransport({
+            service: 'gmail',
+            auth: {
+                user: process.env.EMAIL_USER,
+                pass: process.env.EMAIL_PASS
+            }
+        });
+
+        // Email ka content
+        const mailOptions = {
+            from: process.env.EMAIL_USER, // Bhejne wala (ARK Studio)
+            to: staffMember.email,        // ✅ Paane wala (Staff ki apni original id)
+            subject: '🎥 ARK Studio: New Duty Assigned!',
+            text: `Hello ${staffMember.name},\n\nAapko ARK Studio ki taraf se ek nayi duty assign hui hai!\n\nClient: ${updatedBooking.clientName}\nEvent: ${updatedBooking.eventType}\nPhone: ${updatedBooking.clientPhone}\n\nPlease check your dashboard for time and location.`
+        };
+
+        // Mail send karna
+        await transporter.sendMail(mailOptions);
+
+        res.status(200).json({ 
+            success: true, 
+            message: "Staff successfully assigned & Email sent! 🚀", 
+            data: updatedBooking 
+        });
+
+    } catch (error) {
+        console.log("Assignment/Email Error:", error);
+        res.status(500).json({ success: false, message: "Server error", error: error.message });
+    }
 });
 
 // 5. Shutter Kholna
